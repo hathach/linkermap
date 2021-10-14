@@ -10,7 +10,7 @@ setup(
     license='MIT',
     description='Analyze GNU ld’s linker map.',
     install_requires=[
-        'click'
+        'Click',
     ],
     entry_points={
     'console_scripts': [
