@@ -3,7 +3,9 @@
 import sys, re, os
 from itertools import chain, groupby
 import click
-from linkermap import __version__
+import pkg_resources  # part of setuptools
+
+version_str = pkg_resources.require("linkermap")[0].version
 
 ffmt = '{:>50} |'
 sfmt = '{:>8}'
@@ -129,7 +131,7 @@ def print_summary(verbose, section_list, symbol_table):
     print(ffmt.format('SUM') + ''.join(map(sfmt.format, sum_all.values())))
 
 
-@click.version_option(__version__.version_str)
+@click.version_option(version_str)
 @click.command()
 @click.argument('map_file', required=True)
 @click.option('-v', '--verbose', is_flag=True, help='Print symbols within file')
