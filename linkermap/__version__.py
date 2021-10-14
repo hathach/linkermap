@@ -1,1 +1,0 @@
-version_str = '0.3.0'

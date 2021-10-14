@@ -3,7 +3,9 @@
 import sys, re, os
 from itertools import chain, groupby
 import click
-from linkermap.__version__ import version_str
+import pkg_resources  # part of setuptools
+
+version_str = pkg_resources.require("linkermap")[0].version
 
 ffmt = '{:>50} |'
 sfmt = '{:>8}'
