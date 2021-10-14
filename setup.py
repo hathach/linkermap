@@ -1,9 +1,9 @@
 from distutils.core import setup
-import linkermap.__version__
+from linkermap import __version__
 
 setup(
     name='linkermap',
-    version=linkermap.__version__.version_str,
+    version=__version__.version_str,
     author='Ha Thach',
     author_email='thach@tinyusb.org',
     packages=['linkermap'],
