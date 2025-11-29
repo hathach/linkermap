@@ -1,11 +1,19 @@
 # vim: set fileencoding=utf8 :
 
+import argparse
 import sys, re, os
 from itertools import chain, groupby
-import click
-import pkg_resources  # part of setuptools
 
-version_str = pkg_resources.require("linkermap")[0].version
+# Avoid deprecated pkg_resources; prefer stdlib importlib.metadata.
+try:  # Python >=3.8
+    from importlib import metadata as importlib_metadata
+except ImportError:  # pragma: no cover - Python <3.8 fallback
+    import importlib_metadata  # type: ignore
+
+try:
+    version_str = importlib_metadata.version("linkermap")
+except importlib_metadata.PackageNotFoundError:
+    version_str = "0.0.0"
 
 ffmt = '{:>50} |'
 sfmt = '{:>8}'
@@ -131,13 +139,19 @@ def print_summary(verbose, section_list, symbol_table):
     print(ffmt.format('SUM') + ''.join(map(sfmt.format, sum_all.values())))
 
 
-@click.version_option(version_str)
-@click.command()
-@click.argument('map_file', required=True)
-@click.option('-v', '--verbose', is_flag=True, help='Print symbols within file')
+def build_parser():
+    parser = argparse.ArgumentParser(description='Analyze GNU ld linker map.')
+    parser.add_argument('map_file', help='Path to the linker map file to analyze.')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Print symbols within file.')
+    parser.add_argument('-V', '--version', action='version', version=version_str)
+    return parser
 
-def main(map_file, verbose):
-    fd = open(map_file)
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    fd = open(args.map_file)
     sections = parseSections (fd)
     if sections is None:
         print ('start of memory config not found, did you invoke the compiler/linker with LANG=C?')
@@ -160,7 +174,7 @@ def main(map_file, verbose):
                 symbol_table[k][s.section][symbol.children[0][1] if symbol.children else symbol.section] = symbol.size
                 symbol_table[k]['total'] += symbol.size
 
-    print_summary(verbose, list(map(lambda x: x.section, whitelistedSections)), symbol_table)
+    print_summary(args.verbose, list(map(lambda x: x.section, whitelistedSections)), symbol_table)
 
 if __name__ == '__main__':
     main()
