@@ -1,11 +1,20 @@
 # vim: set fileencoding=utf8 :
 
+import argparse
+import json
 import sys, re, os
 from itertools import chain, groupby
-import click
-import pkg_resources  # part of setuptools
 
-version_str = pkg_resources.require("linkermap")[0].version
+# Avoid deprecated pkg_resources; prefer stdlib importlib.metadata.
+try:  # Python >=3.8
+    from importlib import metadata as importlib_metadata
+except ImportError:  # pragma: no cover - Python <3.8 fallback
+    import importlib_metadata  # type: ignore
+
+try:
+    version_str = importlib_metadata.version("linkermap")
+except importlib_metadata.PackageNotFoundError:
+    version_str = "0.0.0"
 
 ffmt = '{:>50} |'
 sfmt = '{:>8}'
@@ -131,19 +140,38 @@ def print_summary(verbose, section_list, symbol_table):
     print(ffmt.format('SUM') + ''.join(map(sfmt.format, sum_all.values())))
 
 
-@click.version_option(version_str)
-@click.command()
-@click.argument('map_file', required=True)
-@click.option('-v', '--verbose', is_flag=True, help='Print symbols within file')
+def build_parser():
+    parser = argparse.ArgumentParser(description='Analyze GNU ld linker map.')
+    parser.add_argument('map_file', help='Path to the linker map file to analyze.')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Print symbols within file.')
+    parser.add_argument(
+        '-s', '--section',
+        action='append', dest='extra_sections', default=[],
+        help='Additional section name to include; repeat for multiple sections.'
+    )
+    parser.add_argument(
+        '-o', '--output',
+        dest='output',
+        help='Write JSON summary to this file (default: <map_file basename>.json).'
+    )
+    parser.add_argument('-V', '--version', action='version', version=version_str)
+    return parser
 
-def main(map_file, verbose):
-    fd = open(map_file)
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    default_output = os.path.splitext(os.path.basename(args.map_file))[0] + '.json'
+    output_path = args.output or default_output
+
+    fd = open(args.map_file)
     sections = parseSections (fd)
     if sections is None:
         print ('start of memory config not found, did you invoke the compiler/linker with LANG=C?')
         return
 
-    sectionWhitelist = {'.text', '.data', '.bss', '.rodata'}
+    sectionWhitelist = {'.isr_vector', '.text', '.data', '.bss', '.rodata', *args.extra_sections}
     whitelistedSections = list (filter (lambda x: x.section in sectionWhitelist, sections))
     #allObjects = list (chain (*map (lambda x: x.children, whitelistedSections)))
     #allFiles = list (set (map (lambda x: x.basepath, allObjects)))
@@ -160,7 +188,29 @@ def main(map_file, verbose):
                 symbol_table[k][s.section][symbol.children[0][1] if symbol.children else symbol.section] = symbol.size
                 symbol_table[k]['total'] += symbol.size
 
-    print_summary(verbose, list(map(lambda x: x.section, whitelistedSections)), symbol_table)
+    print_summary(args.verbose, list(map(lambda x: x.section, whitelistedSections)), symbol_table)
+
+    # Persist JSON summary.
+    json_sections = list(map(lambda x: x.section, whitelistedSections))
+    json_data = {
+        "sections": json_sections,
+        "files": []
+    }
+    for fname, fdata in symbol_table.items():
+        section_entries = {s: fdata[s] for s in json_sections if s in fdata}
+        json_data["files"].append({
+            "file": fname,
+            "total": fdata.get("total", 0),
+            "sections": section_entries
+        })
+
+    with open(output_path, 'w', encoding='utf-8') as outf:
+        json.dump(json_data, outf, indent=2)
+
+    if not args.verbose:
+        # Keep CLI quiet except for summary and info when not verbose.
+        print(f'JSON summary written to {output_path}')
+
 
 if __name__ == '__main__':
     main()

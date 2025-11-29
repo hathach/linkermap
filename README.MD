@@ -9,11 +9,19 @@ Note: `-flto` merges code across .o files and make it difficult to analyze.
 ```bash
 $ pip install .
 $ linkermap --help
-Usage: linkermap [OPTIONS] MAP_FILE
+usage: linkermap [-h] [-v] [-s EXTRA_SECTIONS] [-o OUTPUT] [-V] map_file
 
-Options:
-  -v, --verbose  Print symbols within file
-  --help         Show this message and exit.
+positional arguments:
+  map_file              Path to the linker map file to analyze.
+
+options:
+  -h, --help            show this help message and exit
+  -v, --verbose         Print symbols within file.
+  -s EXTRA_SECTIONS, --section EXTRA_SECTIONS
+                        Additional section name to include; repeat for multiple sections.
+  -o OUTPUT, --output OUTPUT
+                        Write JSON summary to this file (default: <map_file basename>.json).
+  -V, --version         show program's version number and exit
 ```
 
 ## Usages
@@ -94,4 +102,12 @@ $ linkermap -v cdc_msc.elf.map
                  tud_descriptor_configuration_cb   |       0       0       8       8
                     .rodata.__compound_literal.0   |       0       0       2       2
 ------------------------------------------------------------------------------------
+```
+
+**extra sections & JSON output**
+
+Every run also writes a JSON summary next to the map file (e.g. `cdc_msc.elf.json`). Use `-s/--section` to add more whitelisted sections and `-o/--output` to choose the JSON path:
+
+```bash
+$ linkermap -s .fastcode -s .itcm -o reports/firmware.json build/firmware.map
 ```
