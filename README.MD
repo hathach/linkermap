@@ -9,18 +9,18 @@ Note: `-flto` merges code across .o files and make it difficult to analyze.
 ```bash
 $ pip install .
 $ linkermap --help
-usage: linkermap [-h] [-v] [-s EXTRA_SECTIONS] [-o OUTPUT] [-V] map_file
+usage: linkermap [-h] [-v] [-s EXTRA_SECTIONS] [-o] [-m] [-V] map_file
 
 positional arguments:
   map_file              Path to the linker map file to analyze.
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help            Show this help message and exit
   -v, --verbose         Print symbols within file.
   -s EXTRA_SECTIONS, --section EXTRA_SECTIONS
                         Additional section name to include; repeat for multiple sections.
-  -o OUTPUT, --output OUTPUT
-                        Write JSON summary to this file (default: <map_file basename>.json).
+  -o, -j, --json        Write JSON summary next to the map file (basename + .json).
+  -m, --markdown        Write Markdown table next to the map file (basename + .md).
   -V, --version         show program's version number and exit
 ```
 
@@ -104,10 +104,12 @@ $ linkermap -v cdc_msc.elf.map
 ------------------------------------------------------------------------------------
 ```
 
-**extra sections & JSON output**
+**extra sections & JSON/Markdown output**
 
-Every run also writes a JSON summary next to the map file (e.g. `cdc_msc.elf.json`). Use `-s/--section` to add more whitelisted sections and `-o/--output` to choose the JSON path:
+Enable JSON/Markdown outputs with flags; files are written beside the map using the map’s basename:
 
 ```bash
-$ linkermap -s .fastcode -s .itcm -o reports/firmware.json build/firmware.map
+$ linkermap -s .fastcode -s .itcm -o -m build/firmware.map
 ```
+
+The Markdown table includes a final `SUM` row with totals across all files. JSON and Markdown are saved as `<map_file>.json` / `<map_file>.md` in the same directory as the map file.

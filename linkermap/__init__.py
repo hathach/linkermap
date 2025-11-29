@@ -4,6 +4,7 @@ import argparse
 import json
 import sys, re, os
 from itertools import chain, groupby
+import pandas as pd
 
 # Avoid deprecated pkg_resources; prefer stdlib importlib.metadata.
 try:  # Python >=3.8
@@ -150,9 +151,16 @@ def build_parser():
         help='Additional section name to include; repeat for multiple sections.'
     )
     parser.add_argument(
-        '-o', '--output',
-        dest='output',
-        help='Write JSON summary to this file (default: <map_file basename>.json).'
+        '-j', '--json',
+        dest='json_out',
+        action='store_true',
+        help='Write JSON summary next to the map file (basename + .json).'
+    )
+    parser.add_argument(
+        '-m', '--markdown',
+        dest='markdown_out',
+        action='store_true',
+        help='Write Markdown table next to the map file (basename + .md).'
     )
     parser.add_argument('-V', '--version', action='version', version=version_str)
     return parser
@@ -162,8 +170,8 @@ def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    default_output = os.path.splitext(os.path.basename(args.map_file))[0] + '.json'
-    output_path = args.output or default_output
+    default_output = os.path.splitext(args.map_file)[0] + '.json'
+    default_markdown = os.path.splitext(args.map_file)[0] + '.md'
 
     fd = open(args.map_file)
     sections = parseSections (fd)
@@ -171,7 +179,7 @@ def main(argv=None):
         print ('start of memory config not found, did you invoke the compiler/linker with LANG=C?')
         return
 
-    sectionWhitelist = {'.isr_vector', '.text', '.data', '.bss', '.rodata', *args.extra_sections}
+    sectionWhitelist = {'.text', '.data', '.bss', '.rodata', *args.extra_sections}
     whitelistedSections = list (filter (lambda x: x.section in sectionWhitelist, sections))
     #allObjects = list (chain (*map (lambda x: x.children, whitelistedSections)))
     #allFiles = list (set (map (lambda x: x.basepath, allObjects)))
@@ -204,12 +212,34 @@ def main(argv=None):
             "sections": section_entries
         })
 
-    with open(output_path, 'w', encoding='utf-8') as outf:
-        json.dump(json_data, outf, indent=2)
+    if args.json_out:
+        with open(default_output, 'w', encoding='utf-8') as outf:
+            json.dump(json_data, outf, indent=2)
+        if not args.verbose:
+            print(f'JSON summary written to {default_output}')
 
-    if not args.verbose:
-        # Keep CLI quiet except for summary and info when not verbose.
-        print(f'JSON summary written to {output_path}')
+    if args.markdown_out:
+        rows = []
+        for f in json_data["files"]:
+            row = {
+                "File": f["file"],
+                **{s: sum(f["sections"].get(s, {}).values()) for s in json_sections},
+                "Total": f.get("total", 0)
+            }
+            rows.append(row)
+
+        df = pd.DataFrame(rows).sort_values(by="Total", ascending=False)
+        sum_row = {"File": "SUM", **{s: df[s].sum() for s in json_sections}, "Total": df["Total"].sum()}
+        df = pd.concat([df, pd.DataFrame([sum_row])], ignore_index=True)
+        md_lines = [
+            "# Linker Map Summary",
+            "",
+            df.to_markdown(index=False)
+        ]
+        with open(default_markdown, 'w', encoding='utf-8') as mdfile:
+            mdfile.write("\n".join(md_lines))
+        if not args.verbose:
+            print(f'Markdown summary written to {default_markdown}')
 
 
 if __name__ == '__main__':
