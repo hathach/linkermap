@@ -1,3 +1,4 @@
+__all__ = ["main", "analyze_map", "write_json", "write_markdown", "version_str"]
 # vim: set fileencoding=utf8 :
 
 import argparse
@@ -116,15 +117,17 @@ def print_file(verbose, header, symlist, ffmt):
         print('-' * len(header))
 
 
-def print_summary(verbose, section_list, symbol_table):
+def print_summary(verbose, json_data):
+    section_list = json_data["sections"]
+    files = json_data["files"]
+
     # Dynamic right-aligned width based on longest file/symbol name.
-    name_candidates = list(symbol_table.keys())
+    name_candidates = [f["file"] for f in files]
     if verbose:
-        for f in symbol_table.values():
-            for sec, syms in f.items():
-                if sec in {'total', 'path'}:
-                    continue
-                name_candidates.extend(syms.keys())
+        for f in files:
+            for sec_val in f["sections"].values():
+                if isinstance(sec_val, dict):
+                    name_candidates.extend(sec_val.keys())
     name_width = max(len(n) for n in name_candidates + ['SUM', 'File'])
     ffmt = '{:' + f'>{name_width}' + '} |'
 
@@ -135,21 +138,23 @@ def print_summary(verbose, section_list, symbol_table):
     sum_all = dict.fromkeys(section_list, 0)
     sum_all['total'] = 0
 
-    for file in sorted(symbol_table, key=lambda x: symbol_table[x]['total'], reverse=True):
-        # Print overall of a file object
-        finfo = {file: dict.fromkeys(section_list, 0)}
+    for f in sorted(files, key=lambda x: x['total'], reverse=True):
+        fname = f["file"]
+        finfo = {fname: dict.fromkeys(section_list, 0)}
         for s in section_list:
-            if s in symbol_table[file]:
-                if verbose:
-                    for sym in symbol_table[file][s]:
+            if s in f["sections"]:
+                sec_val = f["sections"][s]
+                if verbose and isinstance(sec_val, dict):
+                    for sym, size in sec_val.items():
                         finfo[sym] = dict.fromkeys(section_list, 0)
-                        finfo[sym][s] = symbol_table[file][s][sym]
-
-                size = sum(symbol_table[file][s].values())
-                finfo[file][s] = size
-
+                        finfo[sym][s] = size
+                    size = sum(sec_val.values())
+                else:
+                    size = sec_val
+                finfo[fname][s] = size
                 sum_all[s] += size
                 sum_all['total'] += size
+
         print_file(verbose, header, sorted(finfo.items(), key=lambda x: sum(x[1].values()), reverse=True), ffmt)
 
     # Sum
@@ -199,6 +204,122 @@ def build_parser():
     return parser
 
 
+
+def analyze_map(map_file, verbose=False, filters=None, extra_sections=None):
+    filters = filters or []
+    extra_sections = extra_sections or []
+
+    fd = open(map_file)
+    sections = parseSections(fd)
+    if sections is None:
+        raise RuntimeError('start of memory config not found, did you invoke the compiler/linker with LANG=C?')
+
+    sectionWhitelist = {'.text', '.data', '.bss', '.rodata', *extra_sections}
+    whitelistedSections = list(filter(lambda x: x.section in sectionWhitelist, sections))
+
+    files_out = []
+
+    for s in whitelistedSections:
+        objects = s.children
+        # Apply path filters if provided.
+        if filters:
+            objects = [o for o in objects if o.path[0] and any(filt in o.path[0] for filt in filters)]
+        for k, g in groupby(sorted(objects, key=lambda x: x.basepath), lambda x: x.basepath):
+            group_list = list(g)
+            if not group_list:
+                continue
+            entry = next((f for f in files_out if f["file"] == k), None)
+            if not entry:
+                entry = {"file": k, "path": group_list[0].path[0], "sections": {}, "total": 0}
+                files_out.append(entry)
+            entry.setdefault("sections", {}).setdefault(s.section, {})
+            for symbol in sorted(group_list, reverse=True, key=lambda x: x.size):
+                entry["sections"][s.section][symbol.children[0][1] if symbol.children else symbol.section] = symbol.size
+                entry["total"] += symbol.size
+
+    json_sections = list(map(lambda x: x.section, whitelistedSections))
+
+    if not verbose:
+        # collapse section dictionaries to totals
+        for f in files_out:
+            collapsed = {}
+            for s in json_sections:
+                if s in f["sections"]:
+                    collapsed[s] = sum(f["sections"][s].values())
+            f["sections"] = collapsed
+
+    json_data = {
+        "sections": json_sections,
+        "verbose": verbose,
+        "files": files_out
+    }
+
+    return json_data
+
+
+def write_json(path, json_data, quiet=False):
+    with open(path, 'w', encoding='utf-8') as outf:
+        json.dump(json_data, outf, indent=2)
+    if not quiet:
+        print(f'JSON summary written to {path}')
+
+
+def write_markdown(path, json_data, verbose=False, quiet=False):
+    json_sections = json_data["sections"]
+    rows = []
+    if verbose:
+        md_lines = ["# Linker Map Summary", "", f"Sections included: {', '.join(json_sections)}", ""]
+        # build nested tables: one per file
+        files_sorted = sorted(json_data["files"], key=lambda f: f["total"], reverse=True)
+        for f in files_sorted:
+            rows = []
+            for section_name, symbols in f["sections"].items():
+                for sym, size in symbols.items():
+                    row = {"Symbol": sym, **{sec: 0 for sec in json_sections}}
+                    row[section_name] = size
+                    rows.append(row)
+            df = pd.DataFrame(rows).fillna(0)
+            if df.empty:
+                continue
+            # ensure consistent column order
+            df["Total"] = df[json_sections].sum(axis=1)
+            df = df[["Symbol", *json_sections, "Total"]]
+            df_sorted = df.sort_values(by="Total", ascending=False, kind="mergesort")
+            sum_row = {"Symbol": "SUM", **{s: df_sorted[s].sum() for s in json_sections}, "Total": df_sorted["Total"].sum()}
+            df_sorted = pd.concat([df_sorted, pd.DataFrame([sum_row])], ignore_index=True)
+            md_lines.append(f"## {f['file']}")
+            md_lines.append("")
+            md_lines.append(df_sorted.to_markdown(index=False))
+            md_lines.append("")
+        if len(md_lines) == 4:  # nothing added
+            md_lines.append("(no matching object files)")
+    else:
+        for f in json_data["files"]:
+            row = {
+                "File": f["file"],
+                **{s: f["sections"].get(s, 0) for s in json_sections},
+                "Total": f.get("total", 0)
+            }
+            rows.append(row)
+
+        if rows:
+            df = pd.DataFrame(rows).sort_values(by="Total", ascending=False)
+            sum_row = {"File": "SUM", **{s: df[s].sum() for s in json_sections}, "Total": df["Total"].sum()}
+            df = pd.concat([df, pd.DataFrame([sum_row])], ignore_index=True)
+            md_lines = [
+                "# Linker Map Summary",
+                "",
+                df.to_markdown(index=False)
+            ]
+        else:
+            md_lines = ["# Linker Map Summary", "", "(no matching object files)"]
+
+    with open(path, 'w', encoding='utf-8') as mdfile:
+        mdfile.write("\n".join(md_lines))
+    if not quiet:
+        print(f'Markdown summary written to {path}')
+
+
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -210,127 +331,25 @@ def main(argv=None):
     want_json = args.json_out
     want_markdown = args.markdown_out
     out_dir = args.out_dir
+    quiet = args.quiet
+
     base_name = os.path.basename(map_file)
     target_dir = out_dir if out_dir else os.path.dirname(map_file)
     if not target_dir:
         target_dir = "."
     json_fname = os.path.join(target_dir, base_name + ".json")
     markdown_fname = os.path.join(target_dir, base_name + ".md")
-    quiet = args.quiet
 
-    fd = open(map_file)
-    sections = parseSections (fd)
-    if sections is None:
-        print ('start of memory config not found, did you invoke the compiler/linker with LANG=C?')
-        return
-
-    sectionWhitelist = {'.text', '.data', '.bss', '.rodata', *extra_sections}
-    whitelistedSections = list (filter (lambda x: x.section in sectionWhitelist, sections))
-    #allObjects = list (chain (*map (lambda x: x.children, whitelistedSections)))
-    #allFiles = list (set (map (lambda x: x.basepath, allObjects)))
-
-    symbol_table = {}
-
-    for s in whitelistedSections:
-        objects = s.children
-        # Apply path filters if provided.
-        if filters:
-            objects = [o for o in objects if o.path[0] and any(filt in o.path[0] for filt in filters)]
-        for k, g in groupby(sorted(objects, key=lambda x: x.basepath), lambda x: x.basepath):
-            group_list = list(g)
-            if not group_list:
-                continue
-            symbol_table.setdefault(k, {})
-            symbol_table[k].setdefault('total', 0)
-            symbol_table[k].setdefault(s.section, {})
-            # record source path once
-            if 'path' not in symbol_table[k]:
-                symbol_table[k]['path'] = group_list[0].path[0]
-            for symbol in sorted(group_list, reverse=True, key=lambda x: x.size):
-                symbol_table[k][s.section][symbol.children[0][1] if symbol.children else symbol.section] = symbol.size
-                symbol_table[k]['total'] += symbol.size
-
-    # Persist JSON-ready structure (also used for printing).
-    json_sections = list(map(lambda x: x.section, whitelistedSections))
-    json_data = {
-        "sections": json_sections,
-        "verbose": verbose,
-        "files": []
-    }
-    for fname, fdata in symbol_table.items():
-        if verbose:
-            section_entries = {s: fdata[s] for s in json_sections if s in fdata}
-        else:
-            section_entries = {s: sum(fdata[s].values()) for s in json_sections if s in fdata}
-        json_data["files"].append({
-            "file": fname,
-            "total": fdata.get("total", 0),
-            "sections": section_entries,
-            "path": symbol_table[fname].get("path")
-        })
+    json_data = analyze_map(map_file, verbose, filters, extra_sections)
 
     if not quiet:
-        print_summary(verbose, json_sections, symbol_table)
+        print_summary(verbose, json_data)
 
     if want_json:
-        with open(json_fname, 'w', encoding='utf-8') as outf:
-            json.dump(json_data, outf, indent=2)
-        if not quiet:
-            print(f'JSON summary written to {json_fname}')
+        write_json(json_fname, json_data, quiet)
 
     if want_markdown:
-        rows = []
-        if verbose:
-            md_lines = ["# Linker Map Summary", "", f"Sections included: {', '.join(json_sections)}", ""]
-            # build nested tables: one per file
-            files_sorted = sorted(json_data["files"], key=lambda f: f["total"], reverse=True)
-            for f in files_sorted:
-                rows = []
-                for section_name, symbols in f["sections"].items():
-                    for sym, size in symbols.items():
-                        row = {"Symbol": sym, **{sec: 0 for sec in json_sections}}
-                        row[section_name] = size
-                        rows.append(row)
-                df = pd.DataFrame(rows).fillna(0)
-                if df.empty:
-                    continue
-                # ensure consistent column order
-                df["Total"] = df[json_sections].sum(axis=1)
-                df = df[["Symbol", *json_sections, "Total"]]
-                df_sorted = df.sort_values(by="Total", ascending=False, kind="mergesort")
-                sum_row = {"Symbol": "SUM", **{s: df_sorted[s].sum() for s in json_sections}, "Total": df_sorted["Total"].sum()}
-                df_sorted = pd.concat([df_sorted, pd.DataFrame([sum_row])], ignore_index=True)
-                md_lines.append(f"## {f['file']}")
-                md_lines.append("")
-                md_lines.append(df_sorted.to_markdown(index=False))
-                md_lines.append("")
-            if len(md_lines) == 4:  # nothing added
-                md_lines.append("(no matching object files)")
-        else:
-            for f in json_data["files"]:
-                row = {
-                    "File": f["file"],
-                    **{s: f["sections"].get(s, 0) for s in json_sections},
-                    "Total": f.get("total", 0)
-                }
-                rows.append(row)
-
-            if rows:
-                df = pd.DataFrame(rows).sort_values(by="Total", ascending=False)
-                sum_row = {"File": "SUM", **{s: df[s].sum() for s in json_sections}, "Total": df["Total"].sum()}
-                df = pd.concat([df, pd.DataFrame([sum_row])], ignore_index=True)
-                md_lines = [
-                    "# Linker Map Summary",
-                    "",
-                    df.to_markdown(index=False)
-                ]
-            else:
-                md_lines = ["# Linker Map Summary", "", "(no matching object files)"]
-
-        with open(markdown_fname, 'w', encoding='utf-8') as mdfile:
-            mdfile.write("\n".join(md_lines))
-        if not quiet:
-            print(f'Markdown summary written to {markdown_fname}')
+        write_markdown(markdown_fname, json_data, verbose, quiet)
 
 
 if __name__ == '__main__':
