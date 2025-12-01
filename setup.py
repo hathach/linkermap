@@ -2,7 +2,7 @@ from distutils.core import setup
 
 setup(
     name='linkermap',
-    version='0.5.0',
+    version='0.6.0',
     author='Ha Thach',
     author_email='thach@tinyusb.org',
     packages=[],

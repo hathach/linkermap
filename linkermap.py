@@ -164,7 +164,7 @@ def build_parser():
         '-j', '--json',
         dest='json_out',
         action='store_true',
-        help='Write JSON summary next to the map file (basename + .json).'
+        help='Write JSON summary next to the map file.'
     )
     parser.add_argument(
         '-f', '--filter',
@@ -177,7 +177,13 @@ def build_parser():
         '-m', '--markdown',
         dest='markdown_out',
         action='store_true',
-        help='Write Markdown table next to the map file (basename + .md).'
+        help='Write Markdown table next to the map file.'
+    )
+    parser.add_argument(
+        '-q', '--quiet',
+        dest='quiet',
+        action='store_true',
+        help='Suppress standard summary output.'
     )
     parser.add_argument('-V', '--version', action='version', version=version_str)
     return parser
@@ -193,9 +199,9 @@ def main(argv=None):
     extra_sections = args.extra_sections or []
     want_json = args.json_out
     want_markdown = args.markdown_out
-
-    default_output = os.path.splitext(map_file)[0] + '.json'
-    default_markdown = os.path.splitext(map_file)[0] + '.md'
+    json_fname = map_file + ".json"
+    markdown_fname = map_file + ".md"
+    quiet = args.quiet
 
     fd = open(map_file)
     sections = parseSections (fd)
@@ -248,13 +254,14 @@ def main(argv=None):
             "path": symbol_table[fname].get("path")
         })
 
-    print_summary(verbose, json_sections, symbol_table)
+    if not quiet:
+        print_summary(verbose, json_sections, symbol_table)
 
     if want_json:
-        with open(default_output, 'w', encoding='utf-8') as outf:
+        with open(json_fname, 'w', encoding='utf-8') as outf:
             json.dump(json_data, outf, indent=2)
-        if not verbose:
-            print(f'JSON summary written to {default_output}')
+        if not quiet:
+            print(f'JSON summary written to {json_fname}')
 
     if want_markdown:
         rows = []
@@ -298,10 +305,10 @@ def main(argv=None):
                 df.to_markdown(index=False)
             ]
 
-        with open(default_markdown, 'w', encoding='utf-8') as mdfile:
+        with open(markdown_fname, 'w', encoding='utf-8') as mdfile:
             mdfile.write("\n".join(md_lines))
-        if not verbose:
-            print(f'Markdown summary written to {default_markdown}')
+        if not quiet:
+            print(f'Markdown summary written to {markdown_fname}')
 
 
 if __name__ == '__main__':
