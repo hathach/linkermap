@@ -8,25 +8,32 @@ Note: `-flto` merges code across .o files and make it difficult to analyze.
 
 ```bash
 $ pip install .
+$ linkermap --version
+0.5.0
+```
+
+## Usages
+
+```bash
 $ linkermap --help
-usage: linkermap [-h] [-v] [-s EXTRA_SECTIONS] [-o OUTPUT] [-V] map_file
+usage: linkermap [-h] [-v] [-s EXTRA_SECTIONS] [-j] [-f FILTER] [-m] [-V] map_file
 
 positional arguments:
   map_file              Path to the linker map file to analyze.
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help            Show this help message and exit
   -v, --verbose         Print symbols within file.
   -s EXTRA_SECTIONS, --section EXTRA_SECTIONS
                         Additional section name to include; repeat for multiple sections.
-  -o OUTPUT, --output OUTPUT
-                        Write JSON summary to this file (default: <map_file basename>.json).
+  -j, --json            Write JSON summary next to the map file (basename + .json).
+  -f FILTER, --filter FILTER
+                        Only include object files whose path contains this substring (can be repeated).
+  -m, --markdown        Write Markdown table next to the map file (basename + .md).
   -V, --version         show program's version number and exit
 ```
 
-## Usages
-
-**non-verbose**
+### non-verbose
 
 ```bash
 $ linkermap cdc_msc.elf.map
@@ -59,7 +66,7 @@ $ linkermap cdc_msc.elf.map
 
 ```
 
-**verbose**
+### verbose
 
 ```
 $ linkermap -v cdc_msc.elf.map
@@ -104,10 +111,44 @@ $ linkermap -v cdc_msc.elf.map
 ------------------------------------------------------------------------------------
 ```
 
-**extra sections & JSON output**
-
-Every run also writes a JSON summary next to the map file (e.g. `cdc_msc.elf.json`). Use `-s/--section` to add more whitelisted sections and `-o/--output` to choose the JSON path:
+### Markdown output
 
 ```bash
-$ linkermap -s .fastcode -s .itcm -o reports/firmware.json build/firmware.map
+$ linkermap -m cdc_msc.elf.map
+
+# Linker Map Summary
+| File                      |   .text |   .rodata |   .data |   .bss |   Total |
+|:--------------------------|--------:|----------:|--------:|-------:|--------:|
+| msc_disk.o                |     300 |        13 |    8192 |      1 |    8506 |
+| usbd.o                    |    2718 |        48 |      24 |    245 |    3035 |
+| dcd_synopsys.o            |    2578 |         0 |       0 |    143 |    2721 |
+| msc_device.o              |    2050 |         0 |       0 |    576 |    2626 |
+| cdc_device.o              |    1044 |         0 |       0 |    312 |    1356 |
+| stm32f4xx_hal_rcc.o       |    1316 |         0 |       0 |      0 |    1316 |
+| tusb_fifo.o               |    1198 |         0 |       0 |      0 |    1198 |
+| libgcc.a                  |     760 |         0 |       0 |      0 |     760 |
+| family.o                  |     564 |         0 |       0 |     68 |     632 |
+| usbd_control.o            |     516 |         0 |       0 |     84 |     600 |
+| stm32f4xx_hal_gpio.o      |     414 |         0 |       0 |      0 |     414 |
+| usb_descriptors.o         |     104 |       172 |      24 |     64 |     364 |
+| stm32f4xx_hal_uart.o      |     326 |         0 |       0 |      0 |     326 |
+| main.o                    |     188 |         0 |       4 |      5 |     197 |
+| libc_nano.a               |     184 |         0 |       0 |      0 |     184 |
+| tusb.o                    |     176 |         0 |       0 |      0 |     176 |
+| stm32f4xx_hal_cortex.o    |     144 |         0 |       0 |      0 |     144 |
+| stm32f4xx_hal.o           |      84 |         0 |       5 |      4 |      93 |
+| startup_stm32f411xe_asm.o |      82 |         0 |       0 |      0 |      82 |
+| system_stm32f4xx.o        |      28 |        24 |       4 |      0 |      56 |
+| SUM                       |   14774 |       257 |    8253 |   1502 |   24786 |
 ```
+
+**extra sections & JSON/Markdown output**
+
+Enable JSON/Markdown outputs with flags; files are written beside the map using the map’s basename:
+
+```bash
+$ linkermap -s .fastcode -s .itcm -j -m build/firmware.map
+```
+
+The Markdown table includes a final `SUM` row with totals across all files. JSON and Markdown are saved as `<map_file>.json` / `<map_file>.md` in the same directory as the map file. Outputs follow the `-v/--verbose` flag: non-verbose shows per-file section totals; verbose lists each symbol per file with section names as columns plus a per-symbol Total column, sorted by size, and a per-file SUM row.
+In verbose mode the Markdown file groups symbols under each file as separate tables for easier browsing. Use `-f/--filter` (repeatable) to include only object files whose path contains given substrings.
