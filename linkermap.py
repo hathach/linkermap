@@ -30,6 +30,11 @@ class Objectfile:
         if comment:
             self.path = re.match (r'^(.+?)(?:\(([^\)]+)\))?$', comment).groups ()
             self.basepath = os.path.basename (self.path[0])
+            # Normalize compiler-generated suffixes like .c.o / .c.obj back to .c
+            if self.basepath.endswith('.c.o'):
+                self.basepath = self.basepath[:-2]  # drop trailing .o
+            elif self.basepath.endswith('.c.obj'):
+                self.basepath = self.basepath[:-4]  # drop trailing .obj
         self.children = []
 
     def __repr__ (self):
