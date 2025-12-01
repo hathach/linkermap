@@ -17,7 +17,6 @@ try:
 except importlib_metadata.PackageNotFoundError:
     version_str = "0.0.0"
 
-ffmt = '{:>50} |'
 sfmt = '{:>8}'
 
 
@@ -98,7 +97,7 @@ def parseSections (fd):
     return sections
 
 
-def print_file(verbose, header, symlist):
+def print_file(verbose, header, symlist, ffmt):
     for sym in symlist:
         n = sym[0]
         if symlist.index(sym) != 0:
@@ -113,6 +112,17 @@ def print_file(verbose, header, symlist):
 
 
 def print_summary(verbose, section_list, symbol_table):
+    # Dynamic right-aligned width based on longest file/symbol name.
+    name_candidates = list(symbol_table.keys())
+    if verbose:
+        for f in symbol_table.values():
+            for sec, syms in f.items():
+                if sec in {'total', 'path'}:
+                    continue
+                name_candidates.extend(syms.keys())
+    name_width = max(len(n) for n in name_candidates + ['SUM', 'File'])
+    ffmt = '{:' + f'>{name_width}' + '} |'
+
     header = ffmt.format('File') + ''.join(map(sfmt.format, section_list)) + sfmt.format('Total')
     print(header)
     print('-'*len(header))
@@ -135,7 +145,7 @@ def print_summary(verbose, section_list, symbol_table):
 
                 sum_all[s] += size
                 sum_all['total'] += size
-        print_file(verbose, header, sorted(finfo.items(), key=lambda x: sum(x[1].values()), reverse=True))
+        print_file(verbose, header, sorted(finfo.items(), key=lambda x: sum(x[1].values()), reverse=True), ffmt)
 
     # Sum
     print(ffmt.format('SUM') + ''.join(map(sfmt.format, sum_all.values())))
