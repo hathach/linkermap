@@ -277,6 +277,8 @@ def main(argv=None):
                         row[section_name] = size
                         rows.append(row)
                 df = pd.DataFrame(rows).fillna(0)
+                if df.empty:
+                    continue
                 # ensure consistent column order
                 df["Total"] = df[json_sections].sum(axis=1)
                 df = df[["Symbol", *json_sections, "Total"]]
@@ -287,6 +289,8 @@ def main(argv=None):
                 md_lines.append("")
                 md_lines.append(df_sorted.to_markdown(index=False))
                 md_lines.append("")
+            if len(md_lines) == 4:  # nothing added
+                md_lines.append("(no matching object files)")
         else:
             for f in json_data["files"]:
                 row = {
@@ -296,14 +300,17 @@ def main(argv=None):
                 }
                 rows.append(row)
 
-            df = pd.DataFrame(rows).sort_values(by="Total", ascending=False)
-            sum_row = {"File": "SUM", **{s: df[s].sum() for s in json_sections}, "Total": df["Total"].sum()}
-            df = pd.concat([df, pd.DataFrame([sum_row])], ignore_index=True)
-            md_lines = [
-                "# Linker Map Summary",
-                "",
-                df.to_markdown(index=False)
-            ]
+            if rows:
+                df = pd.DataFrame(rows).sort_values(by="Total", ascending=False)
+                sum_row = {"File": "SUM", **{s: df[s].sum() for s in json_sections}, "Total": df["Total"].sum()}
+                df = pd.concat([df, pd.DataFrame([sum_row])], ignore_index=True)
+                md_lines = [
+                    "# Linker Map Summary",
+                    "",
+                    df.to_markdown(index=False)
+                ]
+            else:
+                md_lines = ["# Linker Map Summary", "", "(no matching object files)"]
 
         with open(markdown_fname, 'w', encoding='utf-8') as mdfile:
             mdfile.write("\n".join(md_lines))
