@@ -190,6 +190,11 @@ def build_parser():
         action='store_true',
         help='Suppress standard summary output.'
     )
+    parser.add_argument(
+        '-d', '--dir',
+        dest='out_dir',
+        help='Directory to write JSON/Markdown outputs (default: alongside map file).'
+    )
     parser.add_argument('-V', '--version', action='version', version=version_str)
     return parser
 
@@ -204,8 +209,13 @@ def main(argv=None):
     extra_sections = args.extra_sections or []
     want_json = args.json_out
     want_markdown = args.markdown_out
-    json_fname = map_file + ".json"
-    markdown_fname = map_file + ".md"
+    out_dir = args.out_dir
+    base_name = os.path.basename(map_file)
+    target_dir = out_dir if out_dir else os.path.dirname(map_file)
+    if not target_dir:
+        target_dir = "."
+    json_fname = os.path.join(target_dir, base_name + ".json")
+    markdown_fname = os.path.join(target_dir, base_name + ".md")
     quiet = args.quiet
 
     fd = open(map_file)
