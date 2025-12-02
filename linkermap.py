@@ -4,7 +4,7 @@ __all__ = ["main", "analyze_map", "write_json", "write_markdown", "version_str"]
 import argparse
 import json
 import sys, re, os
-from itertools import chain, groupby
+from itertools import groupby
 
 try:
     import pandas as pd
@@ -21,8 +21,6 @@ try:
     version_str = importlib_metadata.version("linkermap")
 except importlib_metadata.PackageNotFoundError:
     version_str = "0.0.0"
-
-sfmt = '{:>8}'
 
 
 class Objectfile:
@@ -107,12 +105,12 @@ def parseSections (fd):
     return sections
 
 
-def print_file(verbose, header, symlist, ffmt):
+def print_file(verbose, header, symlist, ffmt, col_fmt):
     for sym in symlist:
         n = sym[0]
         if symlist.index(sym) != 0:
             n += ' ' * 2
-        print(ffmt.format(n) + ''.join(map(sfmt.format, sym[1].values())) + sfmt.format(sum(sym[1].values())))
+        print(ffmt.format(n) + ''.join(map(col_fmt.format, sym[1].values())) + col_fmt.format(sum(sym[1].values())))
         if verbose and symlist.index(sym) == 0:
             spaces = ffmt.format('-'*len(n))
             print(spaces + '-' * (len(header) - len(spaces)))
@@ -135,7 +133,10 @@ def print_summary(json_data, verbose):
     name_width = max(len(n) for n in name_candidates + ['SUM', 'File'])
     ffmt = '{:' + f'>{name_width}' + '} |'
 
-    header = ffmt.format('File') + ''.join(map(sfmt.format, section_list)) + sfmt.format('Total')
+    col_width = max([8, len("Total"), *(len(sec) for sec in section_list)])
+    col_fmt = '{:' + f'>{col_width}' + '}'
+
+    header = ffmt.format('File') + ''.join(map(col_fmt.format, section_list)) + col_fmt.format('Total')
     print(header)
     print('-'*len(header))
 
@@ -159,11 +160,10 @@ def print_summary(json_data, verbose):
                 sum_all[s] += size
                 sum_all['total'] += size
 
-        print_file(verbose, header, sorted(finfo.items(), key=lambda x: sum(x[1].values()), reverse=True), ffmt)
+        print_file(verbose, header, sorted(finfo.items(), key=lambda x: sum(x[1].values()), reverse=True), ffmt, col_fmt)
 
     # Sum
-    print(ffmt.format('SUM') + ''.join(map(sfmt.format, sum_all.values())))
-
+    print(ffmt.format('SUM') + ''.join(map(col_fmt.format, sum_all.values())))
 
 def build_parser():
     parser = argparse.ArgumentParser(description='Analyze GNU ld linker map.')
@@ -214,16 +214,28 @@ def analyze_map(map_file, verbose=False, filters=None, extra_sections=None):
     extra_sections = extra_sections or []
 
     fd = open(map_file)
-    sections = parseSections(fd)
-    if sections is None:
+    all_sections = parseSections(fd)
+    if all_sections is None:
         raise RuntimeError('start of memory config not found, did you invoke the compiler/linker with LANG=C?')
 
-    sectionWhitelist = {'.text', '.data', '.bss', '.rodata', *extra_sections}
-    whitelistedSections = list(filter(lambda x: x.section in sectionWhitelist, sections))
+    base_sections = ['.text', '.rodata', '.data', '.bss', *extra_sections]
+    aliases = {
+        '.flash.text': '.text',
+        '.flash.rodata': '.rodata',
+        '.dram0.data': '.data',
+        '.dram0.bss': '.bss',
+    }
+    allowed_sections = base_sections + list(aliases.keys())
+
+    wanted_sections = [sec for sec in all_sections if sec.section in allowed_sections]
 
     files_out = []
+    json_sections = []
 
-    for s in whitelistedSections:
+    for s in wanted_sections:
+        canonical_section = aliases.get(s.section, s.section)
+        if canonical_section not in json_sections:
+            json_sections.append(canonical_section)
         objects = s.children
         # Apply path filters if provided.
         if filters:
@@ -236,12 +248,10 @@ def analyze_map(map_file, verbose=False, filters=None, extra_sections=None):
             if not entry:
                 entry = {"file": k, "path": group_list[0].path[0], "sections": {}, "total": 0}
                 files_out.append(entry)
-            entry.setdefault("sections", {}).setdefault(s.section, {})
+            entry.setdefault("sections", {}).setdefault(canonical_section, {})
             for symbol in sorted(group_list, reverse=True, key=lambda x: x.size):
-                entry["sections"][s.section][symbol.children[0][1] if symbol.children else symbol.section] = symbol.size
+                entry["sections"][canonical_section][symbol.children[0][1] if symbol.children else symbol.section] = symbol.size
                 entry["total"] += symbol.size
-
-    json_sections = list(map(lambda x: x.section, whitelistedSections))
 
     if not verbose:
         # collapse section dictionaries to totals
@@ -258,7 +268,6 @@ def analyze_map(map_file, verbose=False, filters=None, extra_sections=None):
     }
 
     return json_data
-
 
 def write_json(json_data, path):
     with open(path, "w", encoding="utf-8") as outf:
