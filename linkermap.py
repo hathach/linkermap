@@ -5,7 +5,11 @@ import argparse
 import json
 import sys, re, os
 from itertools import chain, groupby
-import pandas as pd
+
+try:
+    import pandas as pd
+except ImportError:  # pandas only needed for markdown output
+    pd = None
 
 # Avoid deprecated pkg_resources; prefer stdlib importlib.metadata.
 try:  # Python >=3.8
@@ -262,6 +266,8 @@ def write_json(json_data, path):
 
 
 def write_markdown(json_data, path, verbose=False):
+    if pd is None:
+        raise RuntimeError("pandas is required for markdown output (-m); install pandas or omit the -m option.")
     json_sections = json_data["sections"]
     rows = []
 
