@@ -31,8 +31,10 @@ class Objectfile:
         self.path = (None, None)
         self.basepath = None
         if comment:
-            self.path = re.match (r'^(.+?)(?:\(([^\)]+)\))?$', comment).groups ()
-            self.basepath = os.path.basename (self.path[0])
+            self.path = re.match(r'^(.+?)(?:\(([^)]+)\))?$', comment).groups()
+            self.basepath = os.path.basename(self.path[0])
+            if self.basepath.endswith(":"):
+                self.basepath = self.basepath[:-1]
             # Normalize compiler-generated suffixes like .c.o / .c.obj back to .c
             if self.basepath.endswith('.c.o'):
                 self.basepath = self.basepath[:-2]  # drop trailing .o
@@ -44,65 +46,121 @@ class Objectfile:
         return '<Objectfile {} {:x} {:x} {} {}>'.format (self.section, self.offset, self.size, self.path, repr (self.children))
 
 
-def parseSections (fd):
-    """
-    Quick&Dirty parsing for GNU ld’s linker map output, needs LANG=C, because
-    some messages are localized.
-    """
+def parse_clang_map(lines):
+    sections = []
+    current_section = None
+    last_object = None
 
+    for line in lines:
+        if not line.strip():
+            continue
+        if line.lstrip().startswith('VMA'):
+            continue
+
+        tokens = line.split()
+        if len(tokens) < 4:
+            continue
+
+        try:
+            vma = int(tokens[0], 16)
+            size = int(tokens[2], 16)
+        except ValueError:
+            continue
+
+        out_field = tokens[4] if len(tokens) >= 5 else ''
+
+        # New section line
+        if out_field.startswith('.') and out_field != '.':
+            current_section = out_field
+            sec_obj = Objectfile(current_section, vma, size, comment=None)
+            sections.append(sec_obj)
+            last_object = None
+            continue
+
+        if current_section is None:
+            continue
+
+        # Object contribution line
+        if len(tokens) >= 5 and ':' in out_field:
+            comment = ' '.join(tokens[4:])
+            last_object = Objectfile(current_section, vma, size, comment=comment)
+            sections[-1].children.append(last_object)
+            continue
+
+        # Symbol within last object
+        if last_object is not None and len(tokens) >= 5:
+            symbol_name = ' '.join(tokens[4:])
+            try:
+                sym_offset = int(tokens[0], 16)
+            except ValueError:
+                sym_offset = last_object.offset
+            last_object.children.append((sym_offset, symbol_name))
+
+    return sections
+
+
+def parse_gnu_map(lines):
     sections = []
 
-    # skip until memory map is found
-    found = False
-    while True:
-        l = fd.readline()
-        if not l:
-            break
-        if l.strip () == 'Memory Configuration':
-            found = True
-            break
-    if not found:
+    try:
+        mem_idx = next(i for i, l in enumerate(lines) if l.strip() == 'Memory Configuration')
+    except StopIteration:
         return None
 
-    # long section names result in a linebreak afterwards
-    sectionre = re.compile ('(?P<section>.+?|.{14,}\n)[ ]+0x(?P<offset>[0-9a-f]+)[ ]+0x(?P<size>[0-9a-f]+)(?:[ ]+(?P<comment>.+))?\n+', re.I)
-    subsectionre = re.compile ('[ ]{16}0x(?P<offset>[0-9a-f]+)[ ]+(?P<function>.+)\n+', re.I)
-    s = fd.read ()
+    content = ''.join(lines[mem_idx + 1:])
+
+    sectionre = re.compile('(?P<section>.+?|.{14,}\n)[ ]+0x(?P<offset>[0-9a-f]+)[ ]+0x(?P<size>[0-9a-f]+)(?:[ ]+(?P<comment>.+))?\n+', re.I)
+    subsectionre = re.compile('[ ]{16}0x(?P<offset>[0-9a-f]+)[ ]+(?P<function>.+)\n+', re.I)
+    s = content
     pos = 0
     while True:
-        m = sectionre.match (s, pos)
+        m = sectionre.match(s, pos)
         if not m:
-            # skip that line
             try:
-                nextpos = s.index ('\n', pos)+1
+                nextpos = s.index('\n', pos) + 1
                 pos = nextpos
                 continue
             except ValueError:
                 break
-        pos = m.end ()
-        section = m.group ('section')
-        v = m.group ('offset')
-        offset = int (v, 16) if v is not None else None
-        v = m.group ('size')
-        size = int (v, 16) if v is not None else None
-        comment = m.group ('comment')
+        pos = m.end()
+        section = m.group('section')
+        v = m.group('offset')
+        offset = int(v, 16) if v is not None else None
+        v = m.group('size')
+        size = int(v, 16) if v is not None else None
+        comment = m.group('comment')
         if section != '*default*' and size > 0:
-            of = Objectfile (section, offset, size, comment)
-            if section.startswith (' '):
-                sections[-1].children.append (of)
+            of = Objectfile(section, offset, size, comment)
+            if section.startswith(' '):
+                sections[-1].children.append(of)
                 while True:
-                    m = subsectionre.match (s, pos)
+                    m = subsectionre.match(s, pos)
                     if not m:
                         break
-                    pos = m.end ()
-                    offset, function = m.groups ()
-                    offset = int (offset, 16)
+                    pos = m.end()
+                    offset, function = m.groups()
+                    offset = int(offset, 16)
                     if sections and sections[-1].children:
-                        sections[-1].children[-1].children.append ((offset, function))
+                        sections[-1].children[-1].children.append((offset, function))
             else:
-                sections.append (of)
-
+                sections.append(of)
     return sections
+
+
+def parseSections (fd):
+    """
+    Parse GNU ld or clang/LLVM map files.
+    """
+
+    first_line = fd.readline()
+    rest = fd.readlines()
+
+    # clang/LLVM style map starts with VMA/LMA header
+    if 'VMA' in first_line and 'LMA' in first_line and 'Size' in first_line:
+        return parse_clang_map([first_line, *rest])
+
+    # Fallback to GNU ld parsing
+    return parse_gnu_map([first_line, *rest])
 
 
 def print_file(verbose, header, symlist, ffmt, col_fmt):
