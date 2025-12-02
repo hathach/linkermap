@@ -117,7 +117,7 @@ def print_file(verbose, header, symlist, ffmt):
         print('-' * len(header))
 
 
-def print_summary(verbose, json_data):
+def print_summary(json_data, verbose):
     section_list = json_data["sections"]
     files = json_data["files"]
 
@@ -250,25 +250,32 @@ def analyze_map(map_file, verbose=False, filters=None, extra_sections=None):
 
     json_data = {
         "sections": json_sections,
-        "verbose": verbose,
         "files": files_out
     }
 
     return json_data
 
 
-def write_json(path, json_data, quiet=False):
-    with open(path, 'w', encoding='utf-8') as outf:
+def write_json(json_data, path):
+    with open(path, "w", encoding="utf-8") as outf:
         json.dump(json_data, outf, indent=2)
-    if not quiet:
-        print(f'JSON summary written to {path}')
 
 
-def write_markdown(path, json_data, verbose=False, quiet=False):
+def write_markdown(json_data, path, verbose=False):
     json_sections = json_data["sections"]
     rows = []
+
+    # Build mapfiles bullet list if present
+    mapfiles_lines = []
+    if "mapfiles" in json_data and json_data["mapfiles"]:
+        mapfiles_lines = ["## Map Files", ""]
+        for mf in json_data["mapfiles"]:
+            mapfiles_lines.append(f"- {mf}")
+        mapfiles_lines.append("")
+
     if verbose:
         md_lines = ["# Linker Map Summary", "", f"Sections included: {', '.join(json_sections)}", ""]
+        md_lines.extend(mapfiles_lines)
         # build nested tables: one per file
         files_sorted = sorted(json_data["files"], key=lambda f: f["total"], reverse=True)
         for f in files_sorted:
@@ -291,7 +298,7 @@ def write_markdown(path, json_data, verbose=False, quiet=False):
             md_lines.append("")
             md_lines.append(df_sorted.to_markdown(index=False))
             md_lines.append("")
-        if len(md_lines) == 4:  # nothing added
+        if len(md_lines) == 4 + len(mapfiles_lines):  # nothing added
             md_lines.append("(no matching object files)")
     else:
         for f in json_data["files"]:
@@ -309,15 +316,14 @@ def write_markdown(path, json_data, verbose=False, quiet=False):
             md_lines = [
                 "# Linker Map Summary",
                 "",
+                *mapfiles_lines,
                 df.to_markdown(index=False)
             ]
         else:
-            md_lines = ["# Linker Map Summary", "", "(no matching object files)"]
+            md_lines = ["# Linker Map Summary", "", *mapfiles_lines, "(no matching object files)"]
 
-    with open(path, 'w', encoding='utf-8') as mdfile:
+    with open(path, "w", encoding="utf-8") as mdfile:
         mdfile.write("\n".join(md_lines))
-    if not quiet:
-        print(f'Markdown summary written to {path}')
 
 
 def main(argv=None):
@@ -343,13 +349,17 @@ def main(argv=None):
     json_data = analyze_map(map_file, verbose, filters, extra_sections)
 
     if not quiet:
-        print_summary(verbose, json_data)
+        print_summary(json_data, verbose)
 
     if want_json:
-        write_json(json_fname, json_data, quiet)
+        write_json(json_data, json_fname)
+        if not quiet:
+            print(f"JSON summary written to {json_fname}")
 
     if want_markdown:
-        write_markdown(markdown_fname, json_data, verbose, quiet)
+        write_markdown(json_data, markdown_fname, verbose)
+        if not quiet:
+            print(f"Markdown summary written to {markdown_fname}")
 
 
 if __name__ == '__main__':
