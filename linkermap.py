@@ -500,11 +500,17 @@ def write_markdown(json_data, path, verbose=False, sort_opt=("size", True)):
         else:
             md_lines = ["# Linker Map Summary", "", "(no matching object files)"]
 
-    # Build mapfiles bullet list after the summary table if present
+    # Build mapfiles list after the summary table inside a collapsible block
     if "mapfiles" in json_data and json_data["mapfiles"]:
-        mapfiles_lines = ["## Map Files", ""]
+        mapfiles_lines = [
+            "<details>",
+            "<summary>Map Files</summary>",
+            "",
+        ]
         for mf in json_data["mapfiles"]:
             mapfiles_lines.append(f"- {mf}")
+        mapfiles_lines.append("")
+        mapfiles_lines.append("</details>")
         mapfiles_lines.append("")
         if md_lines and md_lines[-1] != "":
             md_lines.append("")
