@@ -292,6 +292,10 @@ def print_summary(json_data, verbose):
 
         print_file(verbose, header, sorted(finfo.items(), key=lambda x: sum(x[1].values()), reverse=True), ffmt, col_fmt)
 
+    sum_prefix = ffmt.format('SUM')
+    indent = sum_prefix.index('S') if 'S' in sum_prefix else 0
+    print(' ' * indent + '-' * (len(header) - indent))
+
     # Sum
     print(ffmt.format('SUM') + ''.join(map(col_fmt.format, sum_all.values())))
 
@@ -410,17 +414,8 @@ def write_markdown(json_data, path, verbose=False):
     json_sections = json_data["sections"]
     rows = []
 
-    # Build mapfiles bullet list if present
-    mapfiles_lines = []
-    if "mapfiles" in json_data and json_data["mapfiles"]:
-        mapfiles_lines = ["## Map Files", ""]
-        for mf in json_data["mapfiles"]:
-            mapfiles_lines.append(f"- {mf}")
-        mapfiles_lines.append("")
-
     if verbose:
         md_lines = ["# Linker Map Summary", "", f"Sections included: {', '.join(json_sections)}", ""]
-        md_lines.extend(mapfiles_lines)
         # build nested tables: one per file
         files_sorted = sorted(json_data["files"], key=lambda f: f["total"], reverse=True)
         for f in files_sorted:
@@ -443,7 +438,7 @@ def write_markdown(json_data, path, verbose=False):
             md_lines.append("")
             md_lines.append(df_sorted.to_markdown(index=False))
             md_lines.append("")
-        if len(md_lines) == 4 + len(mapfiles_lines):  # nothing added
+        if len(md_lines) == 4:  # nothing added
             md_lines.append("(no matching object files)")
     else:
         for f in json_data["files"]:
@@ -461,11 +456,20 @@ def write_markdown(json_data, path, verbose=False):
             md_lines = [
                 "# Linker Map Summary",
                 "",
-                *mapfiles_lines,
                 df.to_markdown(index=False)
             ]
         else:
-            md_lines = ["# Linker Map Summary", "", *mapfiles_lines, "(no matching object files)"]
+            md_lines = ["# Linker Map Summary", "", "(no matching object files)"]
+
+    # Build mapfiles bullet list after the summary table if present
+    if "mapfiles" in json_data and json_data["mapfiles"]:
+        mapfiles_lines = ["## Map Files", ""]
+        for mf in json_data["mapfiles"]:
+            mapfiles_lines.append(f"- {mf}")
+        mapfiles_lines.append("")
+        if md_lines and md_lines[-1] != "":
+            md_lines.append("")
+        md_lines.extend(mapfiles_lines)
 
     with open(path, "w", encoding="utf-8") as mdfile:
         mdfile.write("\n".join(md_lines))
