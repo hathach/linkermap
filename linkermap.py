@@ -443,7 +443,7 @@ def write_json(json_data, path):
         json.dump(json_data, outf, indent=2)
 
 
-def write_markdown(json_data, path, verbose=False, sort_opt="name+"):
+def write_markdown(json_data, path, verbose=False, sort_opt="name+", title="Linker Map Summary"):
     if pd is None:
         raise RuntimeError("pandas is required for markdown output (-m); install pandas or omit the -m option.")
     json_sections = json_data["sections"]
@@ -452,7 +452,7 @@ def write_markdown(json_data, path, verbose=False, sort_opt="name+"):
     sort_field, reverse = _parse_sort_opt(sort_opt)
 
     if verbose:
-        md_lines = ["# Linker Map Summary", "", f"Sections included: {', '.join(json_sections)}", ""]
+        md_lines = [f"# {title}", "", f"Sections included: {', '.join(json_sections)}", ""]
         # build nested tables: one per file
         file_key = (lambda f: f["total"]) if sort_field == "size" else (lambda f: f["file"].lower())
         files_sorted = sorted(json_data["files"], key=file_key, reverse=reverse)
@@ -495,12 +495,12 @@ def write_markdown(json_data, path, verbose=False, sort_opt="name+"):
             sum_row = {"File": "SUM", **{s: df[s].sum() for s in json_sections}, "Total": df["Total"].sum()}
             df = pd.concat([df, pd.DataFrame([sum_row])], ignore_index=True)
             md_lines = [
-                "# Linker Map Summary",
+                f"# {title}",
                 "",
                 df.to_markdown(index=False)
             ]
         else:
-            md_lines = ["# Linker Map Summary", "", "(no matching object files)"]
+            md_lines = [f"# {title}", "", "(no matching object files)"]
 
     # Build mapfiles list after the summary table inside a collapsible block
     if "mapfiles" in json_data and json_data["mapfiles"]:
