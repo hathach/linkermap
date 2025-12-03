@@ -329,7 +329,7 @@ def print_summary(json_data, verbose, sort_opt="name+"):
     print(ffmt.format('SUM') + ''.join(map(col_fmt.format, sum_all.values())))
 
 def build_parser():
-    parser = argparse.ArgumentParser(description='Analyze GNU ld linker map.')
+    parser = argparse.ArgumentParser(description='Analyze GNU/Clang/IAR ld linker map.')
     parser.add_argument('map_file', help='Path to the linker map file to analyze.')
     parser.add_argument('-v', '--verbose', action='store_true', help='Print symbols within file.')
     parser.add_argument(
