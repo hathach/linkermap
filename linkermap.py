@@ -23,6 +23,28 @@ except importlib_metadata.PackageNotFoundError:
     version_str = "0.0.0"
 
 
+def parse_sort_option(value):
+    """Return (field, reverse) tuple from sort option string.
+
+    Accepts size+/size- or name+/name-. Default is size- (size descending).
+    """
+    if value is None:
+        return ("name", False)
+
+    val = value.lower()
+    mapping = {
+        "size-": ("size", True),
+        "size+": ("size", False),
+        "size": ("size", True),
+        "name-": ("name", True),
+        "name+": ("name", False),
+        "name": ("name", False),
+    }
+    if val not in mapping:
+        raise argparse.ArgumentTypeError("sort must be one of size+, size-, name+, name-")
+    return mapping[val]
+
+
 class Objectfile:
     def __init__ (self, section, offset, size, comment):
         self.section = section.strip ()
@@ -249,7 +271,7 @@ def print_file(verbose, header, symlist, ffmt, col_fmt):
         print('-' * len(header))
 
 
-def print_summary(json_data, verbose):
+def print_summary(json_data, verbose, sort_opt=("size", True)):
     section_list = json_data["sections"]
     files = json_data["files"]
 
@@ -270,10 +292,13 @@ def print_summary(json_data, verbose):
     print(header)
     print('-'*len(header))
 
+    sort_field, reverse = sort_opt
+    file_key = (lambda x: x['total']) if sort_field == "size" else (lambda x: x['file'].lower())
+
     sum_all = dict.fromkeys(section_list, 0)
     sum_all['total'] = 0
 
-    for f in sorted(files, key=lambda x: x['total'], reverse=True):
+    for f in sorted(files, key=file_key, reverse=reverse):
         fname = f["file"]
         finfo = {fname: dict.fromkeys(section_list, 0)}
         for s in section_list:
@@ -290,7 +315,9 @@ def print_summary(json_data, verbose):
                 sum_all[s] += size
                 sum_all['total'] += size
 
-        print_file(verbose, header, sorted(finfo.items(), key=lambda x: sum(x[1].values()), reverse=True), ffmt, col_fmt)
+        sym_key = (lambda x: sum(x[1].values())) if sort_field == "size" else (lambda x: x[0].lower())
+        symlist_sorted = sorted(finfo.items(), key=sym_key, reverse=reverse)
+        print_file(verbose, header, symlist_sorted, ffmt, col_fmt)
 
     sum_prefix = ffmt.format('SUM')
     indent = sum_prefix.index('S') if 'S' in sum_prefix else 0
@@ -326,6 +353,13 @@ def build_parser():
         dest='markdown_out',
         action='store_true',
         help='Write Markdown table next to the map file.'
+    )
+    parser.add_argument(
+        '-S', '--sort',
+        dest='sort',
+        type=parse_sort_option,
+        default=("name", False),
+        help="Sorting: size-, size+, name-, name+ (default name+). Applies to stdout and markdown."
     )
     parser.add_argument(
         '-q', '--quiet',
@@ -408,16 +442,18 @@ def write_json(json_data, path):
         json.dump(json_data, outf, indent=2)
 
 
-def write_markdown(json_data, path, verbose=False):
+def write_markdown(json_data, path, verbose=False, sort_opt=("size", True)):
     if pd is None:
         raise RuntimeError("pandas is required for markdown output (-m); install pandas or omit the -m option.")
     json_sections = json_data["sections"]
     rows = []
+    sort_field, reverse = sort_opt
 
     if verbose:
         md_lines = ["# Linker Map Summary", "", f"Sections included: {', '.join(json_sections)}", ""]
         # build nested tables: one per file
-        files_sorted = sorted(json_data["files"], key=lambda f: f["total"], reverse=True)
+        file_key = (lambda f: f["total"]) if sort_field == "size" else (lambda f: f["file"].lower())
+        files_sorted = sorted(json_data["files"], key=file_key, reverse=reverse)
         for f in files_sorted:
             rows = []
             for section_name, symbols in f["sections"].items():
@@ -431,7 +467,8 @@ def write_markdown(json_data, path, verbose=False):
             # ensure consistent column order
             df["Total"] = df[json_sections].sum(axis=1)
             df = df[["Symbol", *json_sections, "Total"]]
-            df_sorted = df.sort_values(by="Total", ascending=False, kind="mergesort")
+            sort_col = "Total" if sort_field == "size" else "Symbol"
+            df_sorted = df.sort_values(by=sort_col, ascending=not reverse, kind="mergesort")
             sum_row = {"Symbol": "SUM", **{s: df_sorted[s].sum() for s in json_sections}, "Total": df_sorted["Total"].sum()}
             df_sorted = pd.concat([df_sorted, pd.DataFrame([sum_row])], ignore_index=True)
             md_lines.append(f"## {f['file']}")
@@ -450,7 +487,9 @@ def write_markdown(json_data, path, verbose=False):
             rows.append(row)
 
         if rows:
-            df = pd.DataFrame(rows).sort_values(by="Total", ascending=False)
+            df = pd.DataFrame(rows)
+            sort_col = "Total" if sort_field == "size" else "File"
+            df = df.sort_values(by=sort_col, ascending=not reverse)
             sum_row = {"File": "SUM", **{s: df[s].sum() for s in json_sections}, "Total": df["Total"].sum()}
             df = pd.concat([df, pd.DataFrame([sum_row])], ignore_index=True)
             md_lines = [
@@ -480,6 +519,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     map_file = args.map_file
+    sort_opt = args.sort
     verbose = args.verbose
     filters = args.filters or []
     extra_sections = args.extra_sections or []
@@ -498,7 +538,7 @@ def main(argv=None):
     json_data = analyze_map(map_file, verbose, filters, extra_sections)
 
     if not quiet:
-        print_summary(json_data, verbose)
+        print_summary(json_data, verbose, sort_opt)
 
     if want_json:
         write_json(json_data, json_fname)
@@ -506,7 +546,7 @@ def main(argv=None):
             print(f"JSON summary written to {json_fname}")
 
     if want_markdown:
-        write_markdown(json_data, markdown_fname, verbose)
+        write_markdown(json_data, markdown_fname, verbose, sort_opt)
         if not quiet:
             print(f"Markdown summary written to {markdown_fname}")
 
