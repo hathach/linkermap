@@ -322,7 +322,7 @@ def print_summary(json_data, verbose, sort_opt="name+"):
         print_file(verbose, header, symlist_sorted, ffmt, col_fmt)
 
     sum_prefix = ffmt.format('SUM')
-    indent = sum_prefix.index('S') if 'S' in sum_prefix else 0
+    indent = name_width - 3
     print(' ' * indent + '-' * (len(header) - indent))
 
     # Sum
