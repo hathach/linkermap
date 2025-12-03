@@ -147,20 +147,92 @@ def parse_gnu_map(lines):
     return sections
 
 
+def parse_iar_map(lines):
+    sections = {}
+    offsets = {'.text': 0, '.rodata': 0, '.data': 0}
+    try:
+        start_idx = next(i for i, l in enumerate(lines) if l.strip().startswith('*** MODULE SUMMARY'))
+    except StopIteration:
+        return None
+
+    path_line_prefix = ''
+    entry_re_cols = re.compile(r'^\s+([^\s]+)\s+([0-9\'\"]+)(?:\s+([0-9\'\"]+))?(?:\s+([0-9\'\"]+))?\s*$')
+
+    def section_obj(name):
+        if name not in sections:
+            sections[name] = Objectfile(name, 0, 0, comment=None)
+        return sections[name]
+
+    for line in lines[start_idx + 1:]:
+        if not line.strip():
+            continue
+        if line.startswith('***'):
+            continue
+        if line.startswith('----'):
+            continue
+        if line.lstrip().startswith('Total:') or line.lstrip().startswith('Gaps') or line.lstrip().startswith('Linker created'):
+            continue
+        if line.startswith('    -------------------------------------------------'):
+            continue
+        if not line.startswith('    '):
+            if ': [' in line:
+                path_line_prefix = line.split(':', 1)[0].strip()
+            continue
+
+        m = entry_re_cols.match(line)
+        if not m:
+            continue
+        obj_name, ro_code, ro_data, rw_data = m.groups()
+
+        def to_int(val):
+            if not val:
+                return 0
+            return int(val.replace("'", '').replace('"', ''))
+
+        ro_code_i = to_int(ro_code)
+        ro_data_i = to_int(ro_data)
+        rw_data_i = to_int(rw_data)
+
+        full_path = f"{path_line_prefix}/{obj_name}" if path_line_prefix else obj_name
+
+        if ro_code_i:
+            sec = section_obj('.text')
+            obj = Objectfile('.text', offsets['.text'], ro_code_i, full_path)
+            sec.size += ro_code_i
+            sec.children.append(obj)
+            offsets['.text'] += ro_code_i
+        if ro_data_i:
+            sec = section_obj('.rodata')
+            obj = Objectfile('.rodata', offsets['.rodata'], ro_data_i, full_path)
+            sec.size += ro_data_i
+            sec.children.append(obj)
+            offsets['.rodata'] += ro_data_i
+        if rw_data_i:
+            sec = section_obj('.data')
+            obj = Objectfile('.data', offsets['.data'], rw_data_i, full_path)
+            sec.size += rw_data_i
+            sec.children.append(obj)
+            offsets['.data'] += rw_data_i
+
+    return list(sections.values())
+
 def parseSections (fd):
     """
-    Parse GNU ld or clang/LLVM map files.
+    Parse GNU ld, clang/LLVM, or IAR map files.
     """
 
     first_line = fd.readline()
     rest = fd.readlines()
+    lines = [first_line, *rest]
 
-    # clang/LLVM style map starts with VMA/LMA header
     if 'VMA' in first_line and 'LMA' in first_line and 'Size' in first_line:
-        return parse_clang_map([first_line, *rest])
+        return parse_clang_map(lines)
 
-    # Fallback to GNU ld parsing
-    return parse_gnu_map([first_line, *rest])
+    if any('IAR ELF Linker' in l for l in lines[:10]):
+        return parse_iar_map(lines)
+
+    return parse_gnu_map(lines)
+
 
 
 def print_file(verbose, header, symlist, ffmt, col_fmt):
