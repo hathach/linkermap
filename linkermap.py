@@ -193,7 +193,7 @@ def parse_iar_map(lines):
         ro_data_i = to_int(ro_data)
         rw_data_i = to_int(rw_data)
 
-        full_path = f"{path_line_prefix}/{obj_name}" if path_line_prefix else obj_name
+        full_path = os.path.join(path_line_prefix, obj_name) if path_line_prefix else obj_name
 
         if ro_code_i:
             sec = section_obj('.text')
