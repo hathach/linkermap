@@ -23,28 +23,6 @@ except importlib_metadata.PackageNotFoundError:
     version_str = "0.0.0"
 
 
-def parse_sort_option(value):
-    """Return (field, reverse) tuple from sort option string.
-
-    Accepts size+/size- or name+/name-. Default is size- (size descending).
-    """
-    if value is None:
-        return ("name", False)
-
-    val = value.lower()
-    mapping = {
-        "size-": ("size", True),
-        "size+": ("size", False),
-        "size": ("size", True),
-        "name-": ("name", True),
-        "name+": ("name", False),
-        "name": ("name", False),
-    }
-    if val not in mapping:
-        raise argparse.ArgumentTypeError("sort must be one of size+, size-, name+, name-")
-    return mapping[val]
-
-
 class Objectfile:
     def __init__ (self, section, offset, size, comment):
         self.section = section.strip ()
@@ -271,7 +249,31 @@ def print_file(verbose, header, symlist, ffmt, col_fmt):
         print('-' * len(header))
 
 
-def print_summary(json_data, verbose, sort_opt=("size", True)):
+def _parse_sort_opt(value):
+    """Return (field, reverse) tuple from sort option string.
+
+    Accepts size+, size-, name+, name-. Defaults to name+.
+    """
+    if value is None:
+        value = 'name+'
+    if isinstance(value, tuple) and len(value) == 2:
+        field, reverse = value
+        return (field, reverse)
+    val = str(value).lower()
+    mapping = {
+        'size-': ('size', True),
+        'size+': ('size', False),
+        'size': ('size', False),
+        'name-': ('name', True),
+        'name+': ('name', False),
+        'name': ('name', False),
+    }
+    if val not in mapping:
+        val = 'name+'
+    return mapping[val]
+
+
+def print_summary(json_data, verbose, sort_opt="name+"):
     section_list = json_data["sections"]
     files = json_data["files"]
 
@@ -292,7 +294,7 @@ def print_summary(json_data, verbose, sort_opt=("size", True)):
     print(header)
     print('-'*len(header))
 
-    sort_field, reverse = sort_opt
+    sort_field, reverse = _parse_sort_opt(sort_opt)
     file_key = (lambda x: x['total']) if sort_field == "size" else (lambda x: x['file'].lower())
 
     sum_all = dict.fromkeys(section_list, 0)
@@ -357,8 +359,7 @@ def build_parser():
     parser.add_argument(
         '-S', '--sort',
         dest='sort',
-        type=parse_sort_option,
-        default=("name", False),
+        default='name+',
         help="Sorting: size-, size+, name-, name+ (default name+). Applies to stdout and markdown."
     )
     parser.add_argument(
@@ -442,12 +443,13 @@ def write_json(json_data, path):
         json.dump(json_data, outf, indent=2)
 
 
-def write_markdown(json_data, path, verbose=False, sort_opt=("size", True)):
+def write_markdown(json_data, path, verbose=False, sort_opt="name+"):
     if pd is None:
         raise RuntimeError("pandas is required for markdown output (-m); install pandas or omit the -m option.")
     json_sections = json_data["sections"]
     rows = []
-    sort_field, reverse = sort_opt
+
+    sort_field, reverse = _parse_sort_opt(sort_opt)
 
     if verbose:
         md_lines = ["# Linker Map Summary", "", f"Sections included: {', '.join(json_sections)}", ""]
