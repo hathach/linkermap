@@ -235,7 +235,7 @@ def parseSections (fd):
 
 
 
-def print_file(verbose, header, symlist, ffmt, col_fmt):
+def print_file(verbose, header, symlist, ffmt, col_fmt, tail=True):
     for sym in symlist:
         n = sym[0]
         if symlist.index(sym) != 0:
@@ -245,7 +245,7 @@ def print_file(verbose, header, symlist, ffmt, col_fmt):
             spaces = ffmt.format('-'*len(n))
             print(spaces + '-' * (len(header) - len(spaces)))
 
-    if verbose:
+    if verbose and tail:
         print('-' * len(header))
 
 
@@ -300,7 +300,8 @@ def print_summary(json_data, verbose, sort_opt="name+"):
     sum_all = dict.fromkeys(section_list, 0)
     sum_all['total'] = 0
 
-    for f in sorted(files, key=file_key, reverse=reverse):
+    files_sorted = sorted(files, key=file_key, reverse=reverse)
+    for idx, f in enumerate(files_sorted):
         fname = f["file"]
         finfo = {fname: dict.fromkeys(section_list, 0)}
         for s in section_list:
@@ -318,8 +319,16 @@ def print_summary(json_data, verbose, sort_opt="name+"):
                 sum_all['total'] += size
 
         sym_key = (lambda x: sum(x[1].values())) if sort_field == "size" else (lambda x: x[0].lower())
-        symlist_sorted = sorted(finfo.items(), key=sym_key, reverse=reverse)
-        print_file(verbose, header, symlist_sorted, ffmt, col_fmt)
+        items = list(finfo.items())
+        if verbose:
+            file_entry = next((i for i in items if i[0] == fname), None)
+            symbol_entries = [i for i in items if i[0] != fname]
+            symbol_entries_sorted = sorted(symbol_entries, key=sym_key, reverse=reverse)
+            symlist_sorted = [file_entry, *symbol_entries_sorted] if file_entry else symbol_entries_sorted
+        else:
+            symlist_sorted = sorted(items, key=sym_key, reverse=reverse)
+        is_last_file = idx == len(files_sorted) - 1
+        print_file(verbose, header, symlist_sorted, ffmt, col_fmt, tail=not (verbose and is_last_file))
 
     sum_prefix = ffmt.format('SUM')
     indent = name_width - 3
