@@ -391,7 +391,7 @@ def analyze_map(map_file, verbose=False, filters=None, extra_sections=None):
     filters = filters or []
     extra_sections = extra_sections or []
 
-    fd = open(map_file)
+    fd = open(map_file, encoding='utf-8')
     all_sections = parseSections(fd)
     if all_sections is None:
         raise RuntimeError('start of memory config not found, did you invoke the compiler/linker with LANG=C?')
