@@ -6,11 +6,6 @@ import json
 import sys, re, os
 from itertools import groupby
 
-try:
-    import pandas as pd
-except ImportError:  # pandas only needed for markdown output
-    pd = None
-
 # Avoid deprecated pkg_resources; prefer stdlib importlib.metadata.
 try:  # Python >=3.8
     from importlib import metadata as importlib_metadata
@@ -453,18 +448,25 @@ def write_json(json_data, path):
 
 
 def write_markdown(json_data, path, verbose=False, sort_opt="name+", title="Linker Map Summary"):
-    if pd is None:
-        raise RuntimeError("pandas is required for markdown output (-m); install pandas or omit the -m option.")
     json_sections = json_data["sections"]
-    rows = []
-
     sort_field, reverse = _parse_sort_opt(sort_opt)
 
+    def _md_table(headers, rows):
+        def fmt_row(row):
+            return "| " + " | ".join(str(cell) for cell in row) + " |"
+        header_line = fmt_row(headers)
+        separator_line = "| " + " | ".join("---" for _ in headers) + " |"
+        body_lines = [fmt_row(r) for r in rows]
+        return "\n".join([header_line, separator_line, *body_lines])
+
+    md_lines = [f"# {title}", ""]
+
     if verbose:
-        md_lines = [f"# {title}", "", f"Sections included: {', '.join(json_sections)}", ""]
-        # build nested tables: one per file
+        md_lines.append(f"Sections included: {', '.join(json_sections)}")
+        md_lines.append("")
         file_key = (lambda f: f["total"]) if sort_field == "size" else (lambda f: f["file"].lower())
         files_sorted = sorted(json_data["files"], key=file_key, reverse=reverse)
+        added_table = False
         for f in files_sorted:
             rows = []
             for section_name, symbols in f["sections"].items():
@@ -472,23 +474,27 @@ def write_markdown(json_data, path, verbose=False, sort_opt="name+", title="Link
                     row = {"Symbol": sym, **{sec: 0 for sec in json_sections}}
                     row[section_name] = size
                     rows.append(row)
-            df = pd.DataFrame(rows).fillna(0)
-            if df.empty:
+            if not rows:
                 continue
-            # ensure consistent column order
-            df["Total"] = df[json_sections].sum(axis=1)
-            df = df[["Symbol", *json_sections, "Total"]]
+            # compute totals and order columns
+            for row in rows:
+                row["Total"] = sum(row[sec] for sec in json_sections)
             sort_col = "Total" if sort_field == "size" else "Symbol"
-            df_sorted = df.sort_values(by=sort_col, ascending=not reverse, kind="mergesort")
-            sum_row = {"Symbol": "SUM", **{s: df_sorted[s].sum() for s in json_sections}, "Total": df_sorted["Total"].sum()}
-            df_sorted = pd.concat([df_sorted, pd.DataFrame([sum_row])], ignore_index=True)
+            rows_sorted = sorted(rows, key=lambda r: r[sort_col], reverse=reverse)
+            sum_row = {"Symbol": "SUM", **{s: sum(r[s] for r in rows_sorted) for s in json_sections}}
+            sum_row["Total"] = sum(sum_row[s] for s in json_sections)
+            rows_sorted.append(sum_row)
+            headers = ["Symbol", *json_sections, "Total"]
+            table_rows = [[row.get(h, 0) if h != "Symbol" else row.get(h, "") for h in headers] for row in rows_sorted]
             md_lines.append(f"## {f['file']}")
             md_lines.append("")
-            md_lines.append(df_sorted.to_markdown(index=False))
+            md_lines.append(_md_table(headers, table_rows))
             md_lines.append("")
-        if len(md_lines) == 4:  # nothing added
+            added_table = True
+        if not added_table:  # nothing added after initial lines
             md_lines.append("(no matching object files)")
     else:
+        rows = []
         for f in json_data["files"]:
             row = {
                 "File": f["file"],
@@ -498,18 +504,16 @@ def write_markdown(json_data, path, verbose=False, sort_opt="name+", title="Link
             rows.append(row)
 
         if rows:
-            df = pd.DataFrame(rows)
             sort_col = "Total" if sort_field == "size" else "File"
-            df = df.sort_values(by=sort_col, ascending=not reverse)
-            sum_row = {"File": "SUM", **{s: df[s].sum() for s in json_sections}, "Total": df["Total"].sum()}
-            df = pd.concat([df, pd.DataFrame([sum_row])], ignore_index=True)
-            md_lines = [
-                f"# {title}",
-                "",
-                df.to_markdown(index=False)
-            ]
+            rows_sorted = sorted(rows, key=lambda r: r[sort_col], reverse=reverse)
+            sum_row = {"File": "SUM", **{s: sum(r[s] for r in rows_sorted) for s in json_sections}}
+            sum_row["Total"] = sum(sum_row[s] for s in json_sections)
+            rows_sorted.append(sum_row)
+            headers = ["File", *json_sections, "Total"]
+            table_rows = [[row.get(h, 0) if h != "File" else row.get(h, "") for h in headers] for row in rows_sorted]
+            md_lines.append(_md_table(headers, table_rows))
         else:
-            md_lines = [f"# {title}", "", "(no matching object files)"]
+            md_lines.append("(no matching object files)")
 
     # Build mapfiles list after the summary table inside a collapsible block
     if "mapfiles" in json_data and json_data["mapfiles"]:
