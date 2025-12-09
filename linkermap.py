@@ -230,14 +230,15 @@ def parseSections (fd):
 
 
 
-def print_file(verbose, symlist, format_row, sep_line, tail=True, emit=print, first_sep=True):
+def print_file(verbose, symlist, format_row, sep_line, tail=True, emit=print, first_sep=True, percent_lookup=None):
     for idx, sym in enumerate(symlist):
         name = sym[0]
         if idx != 0:
             name += '  '
         values = list(sym[1].values())
-        row_vals = [*values, sum(values)]
-        emit(format_row(row_vals, name))
+        size_val = sum(values)
+        percent_val = percent_lookup(sym[0], size_val, idx == 0) if percent_lookup else ''
+        emit(format_row(values, size_val, percent_val, name))
         if verbose and idx == 0 and first_sep:
             emit(sep_line)
 
@@ -270,8 +271,13 @@ def _parse_sort_opt(value):
 
 
 def _render_table(json_data, verbose, sort_opt, emit_line):
-    section_list = json_data["sections"]
     files = json_data["files"]
+
+    # Build section list on the fly, sorted alphabetically.
+    section_set = set()
+    for f in files:
+        section_set.update(f["sections"].keys())
+    section_list = sorted(section_set, reverse=True)
 
     # Dynamic widths based on longest names.
     name_candidates = [f["file"] for f in files]
@@ -280,14 +286,24 @@ def _render_table(json_data, verbose, sort_opt, emit_line):
             for sec_val in f["sections"].values():
                 if isinstance(sec_val, dict):
                     name_candidates.extend(sec_val.keys())
-    name_width = max(len(n) for n in name_candidates + ['SUM', 'File'])
+    name_width = max(len(n) for n in name_candidates + ['TOTAL', 'File'])
 
-    col_width = max([8, len("Total"), *(len(sec) for sec in section_list)])
+    col_width = max([8, len("size"), *(len(sec) for sec in section_list)])
     col_fmt = '{:' + f'>{col_width}' + '}'
     file_fmt = '{:' + f'<{name_width}' + '}'
+    percent_width = max(len('%'), len('100.0%'))
+    percent_fmt = '{:' + f'>{percent_width}' + '}'
 
-    def format_row(values, fname):
-        cols = [file_fmt.format(fname)] + [col_fmt.format(v) for v in values]
+    def format_percent(val):
+        if val == '' or val is None:
+            return ''
+        return f"{val:.1f}%"
+
+    def format_row(section_vals, size_val, percent_val, fname):
+        cols = [file_fmt.format(fname)]
+        cols.extend(col_fmt.format(v) for v in section_vals)
+        cols.append(col_fmt.format(size_val))
+        cols.append(percent_fmt.format(format_percent(percent_val) if isinstance(percent_val, (int, float)) else percent_val))
         return '| ' + ' | '.join(cols) + ' |'
 
     def _align_right(width):
@@ -296,7 +312,7 @@ def _render_table(json_data, verbose, sort_opt, emit_line):
     def _align_left(width):
         return ':' + '-' * max(2, width - 1)  # Markdown left align
 
-    sep_line = '| ' + ' | '.join([_align_left(name_width)] + [_align_right(col_width) for _ in section_list + ['Total']]) + ' |'
+    sep_line = '| ' + ' | '.join([_align_left(name_width)] + [_align_right(col_width) for _ in section_list] + [_align_right(col_width)] + [_align_right(percent_width)]) + ' |'
 
     sort_field, reverse = _parse_sort_opt(sort_opt)
     file_key = (lambda x: x['size']) if sort_field == "size" else (lambda x: x['file'].lower())
@@ -307,7 +323,7 @@ def _render_table(json_data, verbose, sort_opt, emit_line):
     files_sorted = sorted(files, key=file_key, reverse=reverse)
 
     if not verbose:
-        header = format_row([*section_list, 'Total'], 'File')
+        header = format_row(section_list, 'size', '%', 'File')
         emit_line(header)
         emit_line(sep_line)
 
@@ -338,21 +354,23 @@ def _render_table(json_data, verbose, sort_opt, emit_line):
         else:
             symlist_sorted = sorted(items, key=sym_key, reverse=reverse)
 
+        percent_lookup = lambda n, size_val, is_file: f.get("percent", 0) if is_file else ''
+
         if verbose:
             # Per-file table with header and separator, then file row followed by symbols.
-            header = format_row([*section_list, 'Total'], 'File')
+            header = format_row(section_list, 'size', '%', 'File')
             emit_line(header)
             emit_line(sep_line)
-            print_file(True, symlist_sorted, format_row, sep_line, tail=False, emit=emit_line, first_sep=False)
+            print_file(True, symlist_sorted, format_row, sep_line, tail=False, emit=emit_line, first_sep=False, percent_lookup=percent_lookup)
             emit_line("")  # blank line between tables
         else:
             is_last_file = idx == len(files_sorted) - 1
-            print_file(False, symlist_sorted, format_row, sep_line, tail=not is_last_file, emit=emit_line)
+            print_file(False, symlist_sorted, format_row, sep_line, tail=not is_last_file, emit=emit_line, percent_lookup=percent_lookup)
 
     if not verbose:
         # Sum row only for non-verbose table.
         section_sums = [sum_all[sec] for sec in section_list]
-        emit_line(format_row([*section_sums, sum_all['total']], 'TOTAL'))
+        emit_line(format_row(section_sums, sum_all['total'], 100.0, 'TOTAL'))
 
 
 def print_summary(json_data, verbose, sort_opt="size-"):
@@ -421,12 +439,7 @@ def analyze_map(map_file, verbose=False, filters=None, extra_sections=None):
     wanted_sections = [sec for sec in all_sections if sec.section in base_sections]
 
     files_out = []
-    json_sections = []
-
     for s in wanted_sections:
-        canonical_section = s.section
-        if canonical_section not in json_sections:
-            json_sections.append(canonical_section)
         objects = s.children
         # Apply path filters if provided.
         if filters:
@@ -439,23 +452,24 @@ def analyze_map(map_file, verbose=False, filters=None, extra_sections=None):
             if not entry:
                 entry = {"file": k, "path": group_list[0].path[0], "sections": {}, "size": 0}
                 files_out.append(entry)
-            entry.setdefault("sections", {}).setdefault(canonical_section, {})
+            entry.setdefault("sections", {}).setdefault(s.section, {})
             for symbol in sorted(group_list, reverse=True, key=lambda x: x.size):
-                entry["sections"][canonical_section][symbol.children[0][1] if symbol.children else symbol.section] = symbol.size
+                entry["sections"][s.section][symbol.children[0][1] if symbol.children else symbol.section] = symbol.size
                 entry["size"] += symbol.size
 
     if not verbose:
         # collapse section dictionaries to totals
         for f in files_out:
-            collapsed = {}
-            for s in json_sections:
-                if s in f["sections"]:
-                    collapsed[s] = sum(f["sections"][s].values())
+            collapsed = {sec: sum(f["sections"][sec].values()) for sec in f["sections"]}
             f["sections"] = collapsed
 
+    total_size = sum(f["size"] for f in files_out)
+    for f in files_out:
+        f["percent"] = round((f["size"] / total_size) * 100, 2) if total_size else 0.0
+
     json_data = {
-        "sections": json_sections,
-        "files": files_out
+        "files": files_out,
+        "TOTAL": total_size,
     }
 
     return json_data
