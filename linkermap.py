@@ -230,18 +230,19 @@ def parseSections (fd):
 
 
 
-def print_file(verbose, header, symlist, ffmt, col_fmt, tail=True):
-    for sym in symlist:
-        n = sym[0]
-        if symlist.index(sym) != 0:
-            n += ' ' * 2
-        print(ffmt.format(n) + ''.join(map(col_fmt.format, sym[1].values())) + col_fmt.format(sum(sym[1].values())))
-        if verbose and symlist.index(sym) == 0:
-            spaces = ffmt.format('-'*len(n))
-            print(spaces + '-' * (len(header) - len(spaces)))
+def print_file(verbose, symlist, format_row, sep_line, tail=True, emit=print, first_sep=True):
+    for idx, sym in enumerate(symlist):
+        name = sym[0]
+        if idx != 0:
+            name += '  '
+        values = list(sym[1].values())
+        row_vals = [*values, sum(values)]
+        emit(format_row(row_vals, name))
+        if verbose and idx == 0 and first_sep:
+            emit(sep_line)
 
     if verbose and tail:
-        print('-' * len(header))
+        emit(sep_line)
 
 
 def _parse_sort_opt(value):
@@ -268,11 +269,11 @@ def _parse_sort_opt(value):
     return mapping[val]
 
 
-def print_summary(json_data, verbose, sort_opt="name+"):
+def _render_table(json_data, verbose, sort_opt, emit_line):
     section_list = json_data["sections"]
     files = json_data["files"]
 
-    # Dynamic right-aligned width based on longest file/symbol name.
+    # Dynamic widths based on longest names.
     name_candidates = [f["file"] for f in files]
     if verbose:
         for f in files:
@@ -280,22 +281,36 @@ def print_summary(json_data, verbose, sort_opt="name+"):
                 if isinstance(sec_val, dict):
                     name_candidates.extend(sec_val.keys())
     name_width = max(len(n) for n in name_candidates + ['SUM', 'File'])
-    ffmt = '{:' + f'>{name_width}' + '} |'
 
     col_width = max([8, len("Total"), *(len(sec) for sec in section_list)])
     col_fmt = '{:' + f'>{col_width}' + '}'
+    file_fmt = '{:' + f'<{name_width}' + '}'
 
-    header = ffmt.format('File') + ''.join(map(col_fmt.format, section_list)) + col_fmt.format('Total')
-    print(header)
-    print('-'*len(header))
+    def format_row(values, fname):
+        cols = [file_fmt.format(fname)] + [col_fmt.format(v) for v in values]
+        return '| ' + ' | '.join(cols) + ' |'
+
+    def _align_right(width):
+        return '-' * max(3, width - 1) + ':'  # Markdown right align
+
+    def _align_left(width):
+        return ':' + '-' * max(2, width - 1)  # Markdown left align
+
+    sep_line = '| ' + ' | '.join([_align_left(name_width)] + [_align_right(col_width) for _ in section_list + ['Total']]) + ' |'
 
     sort_field, reverse = _parse_sort_opt(sort_opt)
-    file_key = (lambda x: x['total']) if sort_field == "size" else (lambda x: x['file'].lower())
+    file_key = (lambda x: x['size']) if sort_field == "size" else (lambda x: x['file'].lower())
 
     sum_all = dict.fromkeys(section_list, 0)
     sum_all['total'] = 0
 
     files_sorted = sorted(files, key=file_key, reverse=reverse)
+
+    if not verbose:
+        header = format_row([*section_list, 'Total'], 'File')
+        emit_line(header)
+        emit_line(sep_line)
+
     for idx, f in enumerate(files_sorted):
         fname = f["file"]
         finfo = {fname: dict.fromkeys(section_list, 0)}
@@ -322,15 +337,26 @@ def print_summary(json_data, verbose, sort_opt="name+"):
             symlist_sorted = [file_entry, *symbol_entries_sorted] if file_entry else symbol_entries_sorted
         else:
             symlist_sorted = sorted(items, key=sym_key, reverse=reverse)
-        is_last_file = idx == len(files_sorted) - 1
-        print_file(verbose, header, symlist_sorted, ffmt, col_fmt, tail=not (verbose and is_last_file))
 
-    sum_prefix = ffmt.format('SUM')
-    indent = name_width - 3
-    print(' ' * indent + '-' * (len(header) - indent))
+        if verbose:
+            # Per-file table with header and separator, then file row followed by symbols.
+            header = format_row([*section_list, 'Total'], 'File')
+            emit_line(header)
+            emit_line(sep_line)
+            print_file(True, symlist_sorted, format_row, sep_line, tail=False, emit=emit_line, first_sep=False)
+            emit_line("")  # blank line between tables
+        else:
+            is_last_file = idx == len(files_sorted) - 1
+            print_file(False, symlist_sorted, format_row, sep_line, tail=not is_last_file, emit=emit_line)
 
-    # Sum
-    print(ffmt.format('SUM') + ''.join(map(col_fmt.format, sum_all.values())))
+    if not verbose:
+        # Sum row only for non-verbose table.
+        section_sums = [sum_all[sec] for sec in section_list]
+        emit_line(format_row([*section_sums, sum_all['total']], 'TOTAL'))
+
+
+def print_summary(json_data, verbose, sort_opt="size-"):
+    _render_table(json_data, verbose, sort_opt, print)
 
 def build_parser():
     parser = argparse.ArgumentParser(description='Analyze GNU/Clang/IAR ld linker map.')
@@ -363,8 +389,8 @@ def build_parser():
     parser.add_argument(
         '-S', '--sort',
         dest='sort',
-        default='name+',
-        help="Sorting: size-, size+, name-, name+ (default name+). Applies to stdout and markdown."
+        default='size-',
+        help="Sorting: size-, size+, name-, name+ (default size-). Applies to stdout and markdown."
     )
     parser.add_argument(
         '-q', '--quiet',
@@ -392,21 +418,13 @@ def analyze_map(map_file, verbose=False, filters=None, extra_sections=None):
         raise RuntimeError('start of memory config not found, did you invoke the compiler/linker with LANG=C?')
 
     base_sections = ['.text', '.rodata', '.data', '.bss', *extra_sections]
-    aliases = {
-        '.flash.text': '.text',
-        '.flash.rodata': '.rodata',
-        '.dram0.data': '.data',
-        '.dram0.bss': '.bss',
-    }
-    allowed_sections = base_sections + list(aliases.keys())
-
-    wanted_sections = [sec for sec in all_sections if sec.section in allowed_sections]
+    wanted_sections = [sec for sec in all_sections if sec.section in base_sections]
 
     files_out = []
     json_sections = []
 
     for s in wanted_sections:
-        canonical_section = aliases.get(s.section, s.section)
+        canonical_section = s.section
         if canonical_section not in json_sections:
             json_sections.append(canonical_section)
         objects = s.children
@@ -419,12 +437,12 @@ def analyze_map(map_file, verbose=False, filters=None, extra_sections=None):
                 continue
             entry = next((f for f in files_out if f["file"] == k), None)
             if not entry:
-                entry = {"file": k, "path": group_list[0].path[0], "sections": {}, "total": 0}
+                entry = {"file": k, "path": group_list[0].path[0], "sections": {}, "size": 0}
                 files_out.append(entry)
             entry.setdefault("sections", {}).setdefault(canonical_section, {})
             for symbol in sorted(group_list, reverse=True, key=lambda x: x.size):
                 entry["sections"][canonical_section][symbol.children[0][1] if symbol.children else symbol.section] = symbol.size
-                entry["total"] += symbol.size
+                entry["size"] += symbol.size
 
     if not verbose:
         # collapse section dictionaries to totals
@@ -447,73 +465,17 @@ def write_json(json_data, path):
         json.dump(json_data, outf, indent=2)
 
 
-def write_markdown(json_data, path, verbose=False, sort_opt="name+", title="Linker Map Summary"):
-    json_sections = json_data["sections"]
-    sort_field, reverse = _parse_sort_opt(sort_opt)
-
-    def _md_table(headers, rows):
-        def fmt_row(row):
-            return "| " + " | ".join(str(cell) for cell in row) + " |"
-        header_line = fmt_row(headers)
-        separator_line = "| " + " | ".join("---" for _ in headers) + " |"
-        body_lines = [fmt_row(r) for r in rows]
-        return "\n".join([header_line, separator_line, *body_lines])
-
+def write_markdown(json_data, path, verbose=False, sort_opt="size-", title="Linker Map Summary"):
     md_lines = [f"# {title}", ""]
 
-    if verbose:
-        md_lines.append(f"Sections included: {', '.join(json_sections)}")
-        md_lines.append("")
-        file_key = (lambda f: f["total"]) if sort_field == "size" else (lambda f: f["file"].lower())
-        files_sorted = sorted(json_data["files"], key=file_key, reverse=reverse)
-        added_table = False
-        for f in files_sorted:
-            rows = []
-            for section_name, symbols in f["sections"].items():
-                for sym, size in symbols.items():
-                    row = {"Symbol": sym, **{sec: 0 for sec in json_sections}}
-                    row[section_name] = size
-                    rows.append(row)
-            if not rows:
-                continue
-            # compute totals and order columns
-            for row in rows:
-                row["Total"] = sum(row[sec] for sec in json_sections)
-            sort_col = "Total" if sort_field == "size" else "Symbol"
-            rows_sorted = sorted(rows, key=lambda r: r[sort_col], reverse=reverse)
-            sum_row = {"Symbol": "SUM", **{s: sum(r[s] for r in rows_sorted) for s in json_sections}}
-            sum_row["Total"] = sum(sum_row[s] for s in json_sections)
-            rows_sorted.append(sum_row)
-            headers = ["Symbol", *json_sections, "Total"]
-            table_rows = [[row.get(h, 0) if h != "Symbol" else row.get(h, "") for h in headers] for row in rows_sorted]
-            md_lines.append(f"## {f['file']}")
-            md_lines.append("")
-            md_lines.append(_md_table(headers, table_rows))
-            md_lines.append("")
-            added_table = True
-        if not added_table:  # nothing added after initial lines
-            md_lines.append("(no matching object files)")
-    else:
-        rows = []
-        for f in json_data["files"]:
-            row = {
-                "File": f["file"],
-                **{s: f["sections"].get(s, 0) for s in json_sections},
-                "Total": f.get("total", 0)
-            }
-            rows.append(row)
+    lines: list[str] = []
+    _render_table(json_data, verbose, sort_opt, lines.append)
 
-        if rows:
-            sort_col = "Total" if sort_field == "size" else "File"
-            rows_sorted = sorted(rows, key=lambda r: r[sort_col], reverse=reverse)
-            sum_row = {"File": "SUM", **{s: sum(r[s] for r in rows_sorted) for s in json_sections}}
-            sum_row["Total"] = sum(sum_row[s] for s in json_sections)
-            rows_sorted.append(sum_row)
-            headers = ["File", *json_sections, "Total"]
-            table_rows = [[row.get(h, 0) if h != "File" else row.get(h, "") for h in headers] for row in rows_sorted]
-            md_lines.append(_md_table(headers, table_rows))
-        else:
-            md_lines.append("(no matching object files)")
+    if lines:
+        md_lines.extend(lines)
+    else:
+        md_lines.append("(no matching object files)")
+    md_lines.append("")
 
     # Build mapfiles list after the summary table inside a collapsible block
     if "mapfiles" in json_data and json_data["mapfiles"]:
